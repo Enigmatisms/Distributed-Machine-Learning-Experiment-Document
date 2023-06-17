@@ -22,14 +22,14 @@ class SubNetConv(nn.Module):
         self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5, stride=1, padding=0)
 
     def forward(self, x_rref):
-        """
-        Write your code here!
-        """
-        pass
-
+        x = x_rref
+        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
+        x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
+        out = x.flatten(1)
+        return out
+    
     def parameter_rrefs(self):
         return [rpc.RRef(p) for p in self.parameters()]
-
 
 class SubNetFC(nn.Module):
     def __init__(self, num_classes):
@@ -38,35 +38,32 @@ class SubNetFC(nn.Module):
         self.fc2 = nn.Linear(120, num_classes)
 
     def forward(self, x_rref):
-        """
-        Write your code here!
-        """
-        pass
-
+        x = x_rref
+        x = F.relu(self.fc1(x))
+        out = self.fc2(x)
+        return out
+    
     def parameter_rrefs(self):
         return [rpc.RRef(p) for p in self.parameters()]
-
 
 class ParallelNet(nn.Module):
     def __init__(self, in_channels=1, num_classes=10):
         super().__init__()
         # 分别远程声明SubNetConv和SubNetFC
-        """
-        Write your code here!
-        """
-        pass
+        super().__init__()
+        self.subnet_conv = rpc.remote("worker1",SubNetConv,args=(in_channels,))
+        self.subnet_fc = rpc.remote("worker2",SubNetFC,args=(num_classes,))
 
     def forward(self, x):
-        """
-        Write your code here!
-        """
-        pass
-
+        out_conv = self.subnet_conv.rpc_sync().forward(x)
+        out_fc = self.subnet_fc.rpc_sync().forward(out_conv)
+        return out_fc
+    
     def parameter_rrefs(self):
-        """
-        Write your code here!
-        """
-        pass
+        param_rrefs = []
+        param_rrefs.extend(self.subnet_conv.rpc_sync().parameter_rrefs())
+        param_rrefs.extend(self.subnet_fc.rpc_sync().parameter_rrefs())
+        return param_rrefs
 
 def train(model, dataloader, loss_fn, optimizer, num_epochs=2):
     print("Device {} starts training ...".format(dist_utils.get_local_rank()))
@@ -75,13 +72,19 @@ def train(model, dataloader, loss_fn, optimizer, num_epochs=2):
     dist_utils.init_parameters(model)
     for epoch in range(num_epochs):
         for i, batch_data in enumerate(dataloader):
-            """
-            Write your code here!
-            """
-            pass
+            with dist_autograd.context() as context_id:
+                inputs, labels = batch_data
+                # Forward pass
+                outputs_rref = model(inputs)
+                # Compute loss locally
+                loss = loss_fn(outputs_rref, labels)
+                # Backward pass
+                dist_autograd.backward(context_id,[loss])
+                # Update parameters
+                optimizer.step(context_id)
+        loss_total += loss.item()
     
     print("Training Finished!")
-
 
 def test(model: nn.Module, test_loader):
     model.eval()
@@ -142,6 +145,8 @@ def parse_args():
     parser.add_argument("--rank", default=0, type=int, help="The local rank of device.")
     parser.add_argument('--master_addr', default='localhost', type=str,help='ip of rank 0')
     parser.add_argument('--master_port', default='12355', type=str,help='ip of rank 0')
+    # Division options
+    parser.add_argument('--mode', default='division', type=str,help='The mode of dataset division')
     args = parser.parse_args()
     return args
 

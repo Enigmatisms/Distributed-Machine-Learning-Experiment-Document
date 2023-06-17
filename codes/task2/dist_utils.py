@@ -36,11 +36,14 @@ def init_parameters(model):
         for param in model.parameters():
             dist.broadcast(param.data,0)
 
-
 def allreduce_average_gradients(model):
     for param in model.parameters():
-        # implement your own aggregation method
-        raise NotImplementedError
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        param.grad.data /= get_world_size()
 
 def allgather_average_gradients(model):
-    raise NotImplementedError
+    for param in model.parameters():
+        params = [torch.zeros_like(param.grad.data)] * 2
+        dist.all_gather(params, param.grad.data)
+        averged = torch.mean(torch.stack(params), dim=0)
+        param.grad.data = averged 

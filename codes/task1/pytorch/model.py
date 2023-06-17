@@ -1,9 +1,13 @@
 import os
+import sys
+sys.path.append("../../../")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
 import torchvision
 from MyOptimizer import GdOptimizer, AdamOptimizer
+from codes.datawriter import getSummaryWriter
+from math import sqrt
 
 class Net(nn.Module):
     def __init__(self, in_channels=1, num_classes=10):
@@ -30,10 +34,12 @@ class Net(nn.Module):
 
         return out
 
-def train(model, dataloader, optimizer, loss_fn, num_epochs=1):
+def train(model, dataloader, optimizer, loss_fn, num_epochs=1, batch_size = 1):
     print("Start training ...")
     loss_total = 0.
     model.train()
+    writer = getSummaryWriter(num_epochs, False)
+    train_cnt = 0
     for epoch in range(num_epochs):
         for i, batch_data in enumerate(dataloader):
             # with dist_autograd.context() as context_id:
@@ -46,14 +52,17 @@ def train(model, dataloader, optimizer, loss_fn, num_epochs=1):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             
             loss_total += loss.item()
             if i % 20 == 19:    
+                writer.add_scalar('Train Loss', loss_total / 20, train_cnt)
+                train_cnt += batch_size
                 print('epoch: %d, iters: %5d, loss: %.3f' % (epoch + 1, i + 1, loss_total / 20))
                 loss_total = 0.0
+        print(f"Finished epoch: {epoch + 1:3d} / {num_epochs:3d}")
     
     print("Training Finished!")
+    writer.close()
 
 def test(model: nn.Module, test_loader):
     # test
@@ -84,14 +93,17 @@ def main():
     train_set = torchvision.datasets.MNIST(DATA_PATH, train=True, download=True, transform=transform)
     test_set = torchvision.datasets.MNIST(DATA_PATH, train=False, download=True, transform=transform)
 
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=1, shuffle=True)
+    batch_size = 200
+    epochs = 1
+    lr = 5e-4 * sqrt(batch_size)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=32, shuffle=False)
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = GdOptimizer(model.parameters(), lr=0.01)
-    # optimizer = AdamOptimizer(model.parameters(), lr=0.01, b1=0.9, b2=0.999)
+    # optimizer = GdOptimizer(model.parameters(), lr=lr)
+    optimizer = AdamOptimizer(model.parameters(), lr=lr, b1=0.9, b2=0.999)
 
-    train(model, train_loader, optimizer, loss_fn)
+    train(model, train_loader, optimizer, loss_fn, num_epochs = epochs, batch_size = batch_size)
     test(model, test_loader)
 
 if __name__ == "__main__":

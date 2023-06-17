@@ -44,7 +44,8 @@ def train(model, dataloader, loss_fn, optimizer, num_epochs=2):
 
     # sync the paramters: make models in different nodes the same.
     dist_utils.init_parameters(model)
-
+    bottle_neck_delay = 0.1
+    comm_time_sum = 0.      # total communication time
     starttime = time.time() 
     for epoch in range(num_epochs):
         for i, batch_data in enumerate(dataloader):
@@ -57,7 +58,12 @@ def train(model, dataloader, loss_fn, optimizer, num_epochs=2):
             optimizer.zero_grad()
             loss.backward()
             # averge the gradients of model parameters
+            comm_start_t = time.time()
             dist_utils.allreduce_average_gradients(model)
+            # dist_utils.allgather_average_gradients(model)
+            # if (dist_utils.get_local_rank()==1):
+            #     time.sleep(bottle_neck_delay)
+            comm_time_sum += time.time() - comm_start_t
 
             optimizer.step()
             loss_total += loss.item()
@@ -70,6 +76,7 @@ def train(model, dataloader, loss_fn, optimizer, num_epochs=2):
     endtime = time.time()
     train_time = endtime-starttime
     print("Training time: {}".format(train_time))
+    print(f"Total communication time: {comm_time_sum}")
 
 
 def test(model: nn.Module, test_loader):
@@ -125,7 +132,7 @@ def main(rank, args):
 
     sampler = DistributedSampler(dataset=train_set, num_replicas=args.n_devices, rank=args.rank)
 
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=32, shuffle=False, sampler=sampler)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=30, shuffle=False, sampler=sampler)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=32, shuffle=False)
 
     # construct the loss_fn and optimizer
